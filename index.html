@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Check SAC</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+  .tab-active{background:#0053e2!important;color:#fff!important;border-color:#0053e2!important}
+  .shift-am{border-left:4px solid #ffc220}.shift-pm{border-left:4px solid #0053e2}
+  @media print{.no-print{display:none!important}body{font-size:11px}}
+</style>
+</head>
+<body class="bg-gray-50 min-h-screen text-gray-800">
+
+<!-- sin modal, conexion automatica -->
+
+<!-- HEADER -->
+<header class="bg-[#0053e2] text-white sticky top-0 z-30 shadow-md no-print">
+  <div class="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between flex-wrap gap-2">
+    <div class="flex items-center gap-3">
+      <span class="text-3xl font-black text-[#ffc220]">W</span>
+      <div><h1 class="text-base font-bold leading-tight">Check SAC</h1>
+        <p class="text-xs text-blue-200" id="conn-status">⚠️ Sin configurar</p></div>
+    </div>
+    <div class="flex items-center gap-2 flex-wrap">
+      <input type="date" id="hdr-date"
+        class="border border-blue-400 bg-blue-700 text-white rounded-lg px-3 py-1.5 text-sm focus:outline-none"
+        onchange="onDateChange()"/>
+      <button onclick="showView('history')" class="px-3 py-1.5 bg-blue-700 hover:bg-blue-600 rounded-lg text-sm font-semibold">🕒 Historial</button>
+      <button onclick="askAdmin()" class="px-3 py-1.5 bg-blue-700 hover:bg-blue-600 rounded-lg text-sm font-semibold">⚙️ Admin</button>
+
+    </div>
+  </div>
+  <div class="max-w-3xl mx-auto px-4 pb-2 flex gap-1 flex-wrap" id="check-tabs"></div>
+</header>
+
+<main class="max-w-3xl mx-auto px-4 py-5">
+  <div id="view-check"></div>
+  <div id="view-history" class="hidden"></div>
+  <div id="view-admin"   class="hidden"></div>
+</main>
+<div id="toast" class="fixed bottom-4 right-4 z-50 px-4 py-2 rounded-lg shadow-lg text-sm font-bold text-white bg-green-600 hidden"></div>
+
+<script>
+const createClient = supabase.createClient;
+
+// ── TASK DATA ─────────────────────────────────────────────────────────────────
+const CHECKS = {
+  devoluciones:{label:'Check Devoluciones y Revisión de Fechas',icon:'📦',shifts:{
+    AM:[
+      {id:'dev_am_01',h:'09:00–10:00',t:'Ronda de recuperación productos perecibles del lineal'},
+      {id:'dev_am_02',h:'10:00–11:00',t:'Revisión de fechas muebles (panadería/pastelería/comidas) para alerta temprana'},
+      {id:'dev_am_03',h:'11:00–12:00',t:'Segunda ronda de recuperación de productos'},
+      {id:'dev_am_04',h:'14:00–15:00',t:'Tercera ronda de devoluciones perecibles'},
+    ],
+    PM:[
+      {id:'dev_pm_01',h:'16:00–17:00',t:'Primera ronda de recuperación devoluciones perecibles'},
+      {id:'dev_pm_02',h:'18:00–19:00',t:'Segunda ronda recuperación devoluciones'},
+      {id:'dev_pm_03',h:'20:00–21:00',t:'Tercera ronda recuperación devoluciones'},
+    ],
+  }},
+  limpieza:{label:'Check Limpieza y Mantención',icon:'🧹',shifts:{
+    AM:[
+      {id:'limp_am_01',h:'AM',t:'Revisión basureros exteriores'},
+      {id:'limp_am_02',h:'AM',t:'Revisión limpieza accesos'},
+      {id:'limp_am_03',h:'AM',t:'Limpieza sector de carros'},
+      {id:'limp_am_04',h:'AM',t:'¿Los carros se encuentran limpios, sin papeles?'},
+      {id:'limp_am_05',h:'AM',t:'Limpieza lineal de cajas (¿papeles en el suelo?)'},
+      {id:'limp_am_06',h:'AM',t:'Limpieza sector escala mecánica y convencional'},
+      {id:'limp_am_07',h:'AM',t:'Limpieza de baños (papeleros, piso, lavamanos)'},
+      {id:'limp_am_08',h:'AM',t:'Mantención baños (llaves, tazas, luces)'},
+    ],
+    PM:[
+      {id:'limp_pm_01',h:'PM',t:'Revisión basureros exteriores'},
+      {id:'limp_pm_02',h:'PM',t:'Revisión limpieza accesos'},
+      {id:'limp_pm_03',h:'PM',t:'Limpieza sector de carros'},
+      {id:'limp_pm_04',h:'PM',t:'¿Los carros se encuentran limpios, sin papeles?'},
+      {id:'limp_pm_05',h:'PM',t:'Limpieza lineal de cajas (¿papeles en el suelo?)'},
+      {id:'limp_pm_06',h:'PM',t:'Limpieza sector escala mecánica y convencional'},
+      {id:'limp_pm_07',h:'PM',t:'Limpieza de baños (papeleros, piso, lavamanos)'},
+      {id:'limp_pm_08',h:'PM',t:'Mantención baños (llaves, tazas, luces)'},
+    ],
+  }},
+};
+
+// ── STATE ─────────────────────────────────────────────────────────────────────
+const SB_URL = 'https://cluynjqkcxhhtrrqnahh.supabase.co';
+const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNsdXluanFrY3hoaHRycnFuYWhoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg4ODAzNDEsImV4cCI6MjA5NDQ1NjM0MX0.ZZPjSZx9qaCvX_t2aIvAp8m5BHq9_a2SWAadOQxazNA';
+let sb = null;
+let currentCheck = 'devoluciones';
+let currentDate  = new Date().toISOString().slice(0,10);
+
+async function upsertRecord(check_type, date, shift, task_id, responsable, completed, observation) {
+  const {data, error} = await sb.from('check_records')
+    .upsert({check_type,date,shift,task_id,responsable,completed,observation,updated_at:new Date().toISOString()},
+            {onConflict:'check_type,date,shift,task_id'})
+    .select().single();
+  if (error) throw error;
+  return data;
+}
+async function fetchRecordsMap(check_type, date) {
+  const {data} = await sb.from('check_records').select('*').eq('check_type',check_type).eq('date',date);
+  return Object.fromEntries((data||[]).map(r=>[r.task_id,r]));
+}
+async function fetchPhotos(record_id) {
+  const {data} = await sb.from('check_photos').select('*').eq('record_id',record_id).order('uploaded_at');
+  return data||[];
+}
+async function uploadPhoto(file, record_id) {
+  const ext = file.name.split('.').pop().toLowerCase();
+  const path = `${record_id}/${Date.now()}.${ext}`;
+  const {error} = await sb.storage.from('sac-photos').upload(path, file);
+  if (error) throw error;
+  const {data:{publicUrl}} = sb.storage.from('sac-photos').getPublicUrl(path);
+  await sb.from('check_photos').insert({record_id, photo_url:publicUrl, orig_name:file.name});
+  return publicUrl;
+}
+async function removePhoto(photo_id, photo_url) {
+  const path = photo_url.split('/object/public/sac-photos/')[1];
+  if (path) await sb.storage.from('sac-photos').remove([path]);
+  await sb.from('check_photos').delete().eq('id', photo_id);
+}
+
+// ── RENDER CHECK ──────────────────────────────────────────────────────────────
+async function renderCheck() {
+  if (!sb) return;
+  document.getElementById('view-check').innerHTML = '<p class="text-center text-gray-400 py-12">⏳ Cargando…</p>';
+  const check   = CHECKS[currentCheck];
+  const records = await fetchRecordsMap(currentCheck, currentDate);
+  let html = `<h2 class="text-lg font-black text-[#0053e2] mb-1">${check.icon} ${check.label}</h2>
+              <p class="text-sm text-gray-400 mb-5">${currentDate}</p>`;
+  for (const [shift, tasks] of Object.entries(check.shifts)) {
+    const done = tasks.filter(t=>records[t.id]?.completed).length;
+    const pct  = tasks.length ? Math.round(done/tasks.length*100) : 0;
+    const pCls = pct>=80?'bg-green-100 text-green-700':pct>=50?'bg-yellow-100 text-yellow-700':'bg-red-100 text-red-600';
+    const bCls = pct>=80?'bg-green-500':pct>=50?'bg-yellow-400':'bg-red-400';
+    let cards = '';
+    for (const task of tasks) {
+      const rec    = records[task.id]||null;
+      const photos = rec ? await fetchPhotos(rec.id) : [];
+      cards += buildCard(task, rec, photos, shift);
+    }
+    html += `<section class="mb-8">
+      <div class="flex items-center gap-3 mb-3">
+        <span class="font-black text-base ${shift==='AM'?'text-yellow-700':'text-indigo-700'}">${shift==='AM'?'☀️':'🌙'} Turno ${shift}</span>
+        <span class="text-xs font-bold px-2 py-0.5 rounded-full ${pCls}">${done}/${tasks.length} · ${pct}%</span>
+        <div class="flex-1 bg-gray-200 rounded-full h-2"><div class="h-2 rounded-full ${bCls}" style="width:${pct}%"></div></div>
+      </div>
+      <div class="space-y-3">${cards}</div>
+    </section>`;
+  }
+  document.getElementById('view-check').innerHTML = html;
+}
+
+function buildCard(task, rec, photos, shift) {
+  const done = rec?.completed;
+  const photoHTML = photos.map(p=>`
+    <div class="relative group">
+      <a href="${p.photo_url}" target="_blank"><img src="${p.photo_url}" class="w-20 h-20 object-cover rounded-xl border shadow-sm"/></a>
+      <button onclick="delPhoto(${p.id},'${p.photo_url}')"
+        class="absolute -top-2 -right-2 w-5 h-5 bg-red-500 hover:bg-red-600 text-white rounded-full text-xs flex items-center justify-center font-bold shadow">×</button>
+    </div>`).join('');
+  return `<div id="card-${task.id}" class="bg-white rounded-2xl shadow-sm border-2 ${done?'border-green-400':'border-gray-200'} overflow-hidden shift-${shift.toLowerCase()}">
+    <div class="flex items-start gap-3 px-4 pt-4 pb-2">
+      <span class="mt-0.5 w-6 h-6 rounded-full border-2 flex items-center justify-center text-xs font-bold flex-shrink-0 ${done?'bg-green-500 border-green-500 text-white':'border-gray-300 text-transparent'}">✓</span>
+      <div class="flex-1"><p class="text-xs font-mono text-gray-400 mb-0.5">⏰ ${task.h}</p><p class="font-semibold text-sm">${task.t}</p></div>
+      <span class="text-xs font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${done?'bg-green-100 text-green-700':'bg-yellow-50 text-yellow-700'}">${done?'✓ OK':'Pendiente'}</span>
+    </div>
+    <div class="px-4 pb-4 space-y-3">
+      <input type="text" id="resp-${task.id}" placeholder="👤 Responsable" value="${rec?.responsable||''}"
+        class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm bg-gray-50 focus:ring-2 focus:ring-[#0053e2] focus:outline-none"/>
+      <textarea id="obs-${task.id}" rows="2" placeholder="📝 Observación / Comentario…"
+        class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none bg-gray-50 focus:ring-2 focus:ring-[#0053e2] focus:outline-none">${rec?.observation||''}</textarea>
+      <div>
+        <label class="text-xs font-semibold text-gray-400 block mb-1">📷 Agregar fotos (pueden ser varias)</label>
+        <input type="file" id="file-${task.id}" multiple accept="image/*" capture="environment"
+          class="w-full text-sm text-gray-500 file:mr-3 file:py-1.5 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-semibold file:bg-[#0053e2] file:text-white hover:file:bg-blue-700 cursor-pointer"/>
+      </div>
+      ${photos.length?`<div class="flex flex-wrap gap-2">${photoHTML}</div>`:''}
+      <div class="flex items-center gap-4 pt-1">
+        <label class="flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" id="chk-${task.id}" ${done?'checked':''} class="w-4 h-4 accent-[#0053e2]"/>
+          <span class="text-sm font-semibold">Marcar cumplido</span>
+        </label>
+        <button onclick="saveTask('${task.id}','${shift}', event)"
+          class="ml-auto px-5 py-2 bg-[#0053e2] hover:bg-blue-700 text-white text-sm font-bold rounded-xl">Guardar 💾</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ── ACTIONS ───────────────────────────────────────────────────────────────────
+async function saveTask(task_id, shift, e) {
+  const btn = e.target; btn.textContent='⏳'; btn.disabled=true;
+  try {
+    const rec = await upsertRecord(currentCheck, currentDate, shift, task_id,
+      document.getElementById(`resp-${task_id}`).value.trim(),
+      document.getElementById(`chk-${task_id}`).checked ? 1 : 0,
+      document.getElementById(`obs-${task_id}`).value.trim());
+    for (const f of document.getElementById(`file-${task_id}`).files) await uploadPhoto(f, rec.id);
+    toast('✅ Guardado en línea');
+    renderCheck();
+  } catch(err) { toast('❌ '+err.message,'red'); btn.textContent='Guardar 💾'; btn.disabled=false; }
+}
+async function delPhoto(photo_id, photo_url) {
+  if (!confirm('¿Eliminar esta foto?')) return;
+  await removePhoto(photo_id, photo_url);
+  toast('🗑️ Foto eliminada');
+  renderCheck();
+}
+
+// ── HISTORY ───────────────────────────────────────────────────────────────────
+async function renderHistory() {
+  document.getElementById('view-history').innerHTML = '<p class="text-center text-gray-400 py-12">⏳ Cargando historial…</p>';
+  const {data:records} = await sb.from('check_records').select('*').order('date',{ascending:false}).order('check_type').order('shift');
+  const {data:photos}  = await sb.from('check_photos').select('*');
+  if (!records?.length) {
+    document.getElementById('view-history').innerHTML = `
+      <h2 class="text-lg font-black text-[#0053e2] mb-4">🕒 Historial</h2>
+      <div class="bg-white rounded-2xl border p-12 text-center text-gray-400">
+        <p class="text-4xl mb-3">📭</p><p class="font-semibold">Sin registros aún.</p>
+        <button onclick="showView('check')" class="mt-4 text-sm text-[#0053e2] font-semibold hover:underline">← Volver al check</button>
+      </div>`; return;
+  }
+  // Fotos por record_id
+  const pbr = {};
+  (photos||[]).forEach(p => { if(!pbr[p.record_id]) pbr[p.record_id]=[]; pbr[p.record_id].push(p); });
+  // Agrupar: fecha → check_type → shift → [records]
+  const byDate = {};
+  records.forEach(r => {
+    if(!byDate[r.date])                        byDate[r.date]={};
+    if(!byDate[r.date][r.check_type])          byDate[r.date][r.check_type]={};
+    if(!byDate[r.date][r.check_type][r.shift]) byDate[r.date][r.check_type][r.shift]=[];
+    byDate[r.date][r.check_type][r.shift].push(r);
+  });
+
+  const shiftStyle = {
+    AM:{ icon:'☀️', hdr:'bg-yellow-50 border-yellow-200', badge:'bg-yellow-100 text-yellow-700' },
+    PM:{ icon:'🌙', hdr:'bg-indigo-50 border-indigo-200', badge:'bg-indigo-100 text-indigo-700' },
+  };
+
+  let html = `<div class="flex items-center justify-between mb-5 flex-wrap gap-2">
+    <h2 class="text-lg font-black text-[#0053e2]">🕒 Historial de Registros</h2>
+    <button onclick="showView('check')" class="text-sm text-[#0053e2] font-semibold hover:underline no-print">← Volver</button>
+  </div>`;
+
+  for (const [date, byCheck] of Object.entries(byDate)) {
+    const allRecs = Object.values(byCheck).flatMap(s=>Object.values(s).flat());
+    const done=allRecs.filter(r=>r.completed).length, pct=Math.round(done/allRecs.length*100);
+    const pCls=pct>=80?'bg-green-100 text-green-700':pct>=50?'bg-yellow-100 text-yellow-700':'bg-red-100 text-red-600';
+
+    html += `<div id="hist-${date}" class="mb-10">
+      <div class="flex items-center gap-3 mb-4 px-1">
+        <span class="text-base font-black text-gray-700">📅 ${date}</span>
+        <span class="text-xs font-bold px-2 py-0.5 rounded-full ${pCls}">${done}/${allRecs.length} · ${pct}% total</span>
+      </div>`;
+
+    for (const [cid, byShift] of Object.entries(byCheck)) {
+      const chk    = CHECKS[cid];
+      const chkRecs= Object.values(byShift).flat();
+      const chkDone=chkRecs.filter(r=>r.completed).length, chkPct=Math.round(chkDone/chkRecs.length*100);
+      const chkCls =chkPct>=80?'bg-green-100 text-green-700':chkPct>=50?'bg-yellow-100 text-yellow-700':'bg-red-100 text-red-600';
+
+      html += `<div class="mb-5 rounded-2xl border-2 ${cid==='devoluciones'?'border-orange-200':'border-teal-200'} overflow-hidden">
+        <!-- Check type header -->
+        <div class="flex items-center gap-3 px-5 py-2.5 ${cid==='devoluciones'?'bg-orange-50':'bg-teal-50'}">
+          <span class="font-black text-gray-800 text-sm">${chk?.icon||''} ${chk?.label||cid}</span>
+          <span class="text-xs font-bold px-2 py-0.5 rounded-full ${chkCls}">${chkDone}/${chkRecs.length} · ${chkPct}%</span>
+        </div>`;
+
+      for (const [shift, recs] of Object.entries(byShift)) {
+        const ss     = shiftStyle[shift]||shiftStyle.AM;
+        const sdone  = recs.filter(r=>r.completed).length, spct=Math.round(sdone/recs.length*100);
+        const sCls   = spct>=80?'bg-green-100 text-green-700':spct>=50?'bg-yellow-100 text-yellow-700':'bg-red-100 text-red-600';
+        const blockId= `hist-${date}-${cid}-${shift}`;
+        const label  = `${chk?.label||cid} – Turno ${shift}`;
+
+        html += `<div id="${blockId}" class="border-t ${ss.hdr}">
+          <!-- Turno header -->
+          <div class="flex items-center justify-between px-5 py-2.5 flex-wrap gap-2">
+            <div class="flex items-center gap-2">
+              <span class="font-bold text-sm text-gray-700">${ss.icon} Turno ${shift}</span>
+              <span class="text-xs font-bold px-2 py-0.5 rounded-full ${sCls}">${sdone}/${recs.length} · ${spct}%</span>
+            </div>
+            <div class="flex gap-2 no-print">
+              <button onclick="printBlock('${blockId}')" class="px-3 py-1.5 bg-[#0053e2] hover:bg-blue-700 text-white text-xs font-bold rounded-xl">🖨️ Imprimir</button>
+              <button onclick="sharePDF('${blockId}','${date}','${label}')" class="px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white text-xs font-bold rounded-xl">📲 WhatsApp</button>
+            </div>
+          </div>
+          <!-- Tabla tareas -->
+          <div class="overflow-x-auto bg-white">
+            <table class="w-full text-sm">
+              <thead class="bg-gray-50 text-xs text-gray-500 uppercase border-b border-t"><tr>
+                <th class="px-4 py-2 text-left">Tarea</th>
+                <th class="px-4 py-2 text-left">Responsable</th>
+                <th class="px-4 py-2 text-left">Estado</th>
+                <th class="px-4 py-2 text-left">Observación</th>
+                <th class="px-4 py-2 text-left no-print">Fotos</th>
+              </tr></thead>
+              <tbody class="divide-y divide-gray-50">
+              ${recs.map(r=>{
+                const task=chk&&chk.shifts[shift]?.find(t=>t.id===r.task_id), rp=pbr[r.id]||[];
+                return `<tr class="${r.completed?'bg-green-50/40':''}">
+                  <td class="px-4 py-3 max-w-xs text-xs"><p class="font-medium">${task?.t||r.task_id}</p><p class="text-gray-400">${task?.h||''}</p></td>
+                  <td class="px-4 py-3 text-xs text-gray-600">${r.responsable||'—'}</td>
+                  <td class="px-4 py-3 whitespace-nowrap">${r.completed
+                    ?'<span class="text-xs font-bold text-green-700 bg-green-100 px-2 py-0.5 rounded-full">✓ Cumplido</span>'
+                    :'<span class="text-xs text-yellow-700 bg-yellow-50 px-2 py-0.5 rounded-full font-semibold">Pendiente</span>'}
+                  </td>
+                  <td class="px-4 py-3 text-xs text-gray-600 max-w-xs">${r.observation||'—'}</td>
+                  <td class="px-4 py-3 no-print">${rp.length
+                    ?`<div class="flex gap-1 flex-wrap">${rp.map(p=>`<a href="${p.photo_url}" target="_blank"><img src="${p.photo_url}" class="w-10 h-10 object-cover rounded-lg border"/></a>`).join('')}</div>`
+                    :'—'}
+                  </td>
+                </tr>`;
+              }).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>`; // cierra bloque turno
+      }
+      html += `</div>`; // cierra bloque check type
+    }
+    html += `</div>`; // cierra hist-{date}
+  }
+  document.getElementById('view-history').innerHTML = html;
+}
+
+function printBlock(blockId) {
+  const all = document.querySelectorAll('#view-history [id^="hist-"]');
+  const target = document.getElementById(blockId);
+  all.forEach(el => el._orig = el.style.display);
+  all.forEach(el => { el.style.display = el.id===blockId ? '' : 'none'; });
+  const parent = target?.parentElement;
+  if (parent?.id?.startsWith('hist-')) parent.style.display = '';
+  window.print();
+  all.forEach(el => { el.style.display = el._orig || ''; });
+}
+
+async function sharePDF(blockId, date, checkLabel) {
+  const el = document.getElementById(blockId);
+  if (!el) return;
+  const btn = event.target;
+  btn.textContent = '⏳ Generando...';
+  btn.disabled = true;
+  try {
+    // Ocultar botones temporalmente
+    const noPrint = el.querySelectorAll('.no-print');
+    noPrint.forEach(e => e.style.visibility = 'hidden');
+    const canvas = await html2canvas(el, { scale:2, useCORS:true, backgroundColor:'#ffffff' });
+    noPrint.forEach(e => e.style.visibility = '');
+
+    const { jsPDF } = window.jspdf;
+    const pdf  = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' });
+    const imgW = 190;
+    const imgH = (canvas.height * imgW) / canvas.width;
+    const titulo = `${checkLabel} — ${date}`;
+    pdf.setFontSize(11);
+    pdf.setTextColor(0, 83, 226);
+    pdf.text(titulo, 10, 12);
+    pdf.addImage(canvas.toDataURL('image/jpeg', 0.85), 'JPEG', 10, 18, imgW, Math.min(imgH, 270));
+
+    const fileName = `CheckSAC_${date}_${blockId}.pdf`;
+    const pdfBlob  = pdf.output('blob');
+    const pdfFile  = new File([pdfBlob], fileName, { type:'application/pdf' });
+
+    // Móvil → share nativo (WhatsApp, etc.)
+    if (navigator.canShare && navigator.canShare({ files:[pdfFile] })) {
+      await navigator.share({ title:titulo, text:`Check SAC — ${date}`, files:[pdfFile] });
+    } else {
+      // Desktop → descarga el PDF
+      pdf.save(fileName);
+      toast('💾 PDF descargado — adjúntalo en WhatsApp');
+    }
+  } catch(err) {
+    if (err.name !== 'AbortError') toast('❌ ' + err.message, 'red');
+  } finally {
+    btn.textContent = '📲 WhatsApp';
+    btn.disabled = false;
+  }
+}
+
+// ── ADMIN ────────────────────────────────────────────────────────────────────
+const ADMIN_PASS = 'walm2024';
+let adminOk = false;
+
+function askAdmin() {
+  if (adminOk) { showView('admin'); return; }
+  const pw = prompt('🔐 Contraseña de administrador:');
+  if (pw === ADMIN_PASS) { adminOk = true; showView('admin'); }
+  else if (pw !== null)  { alert('❌ Contraseña incorrecta'); }
+}
+
+async function renderAdmin() {
+  const el = document.getElementById('view-admin');
+  el.innerHTML = '<p class="text-center text-gray-400 py-12">⏳ Cargando tareas…</p>';
+  const { data: dbTasks } = await sb.from('check_tasks').select('*').order('check_type').order('shift').order('orden');
+
+  // Si la DB está vacía, ofrece sembrar tareas por defecto
+  const isEmpty = !dbTasks?.length;
+  let html = `
+  <div class="flex items-center justify-between mb-5 flex-wrap gap-3">
+    <h2 class="text-lg font-black text-[#0053e2]">⚙️ Administrador de Tareas</h2>
+    <div class="flex gap-2 flex-wrap no-print">
+      ${isEmpty ? `<button onclick="seedTasks()" class="px-4 py-2 bg-yellow-500 hover:bg-yellow-600 text-white text-sm font-bold rounded-xl">📥 Cargar tareas por defecto</button>` : ''}
+      <button onclick="showView('check')" class="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-sm font-bold rounded-xl">← Volver</button>
+    </div>
+  </div>`;
+
+  if (isEmpty) {
+    html += `<div class="bg-yellow-50 border border-yellow-200 rounded-2xl p-8 text-center">
+      <p class="text-4xl mb-3">📋</p>
+      <p class="font-semibold text-yellow-800">No hay tareas en la base de datos todavía.</p>
+      <p class="text-sm text-yellow-700 mt-1">Carga las tareas por defecto para comenzar a editarlas.</p>
+    </div>`;
+  } else {
+    // Agrupar por check_type + shift
+    const groups = {};
+    dbTasks.forEach(t => {
+      const k = t.check_type + '|' + t.shift;
+      if (!groups[k]) groups[k] = [];
+      groups[k].push(t);
+    });
+    for (const [key, tasks] of Object.entries(groups)) {
+      const [cid, shift] = key.split('|');
+      const chk = CHECKS[cid];
+      const shiftIcon = shift === 'AM' ? '☀️' : '🌙';
+      html += `
+      <div class="mb-6 bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+        <div class="flex items-center justify-between px-5 py-3 ${cid==='devoluciones'?'bg-orange-50':'bg-teal-50'} border-b flex-wrap gap-2">
+          <span class="font-black text-gray-800 text-sm">${chk?.icon||''} ${chk?.label||cid} — ${shiftIcon} Turno ${shift}</span>
+          <button onclick="openAddTask('${cid}','${shift}')" class="px-3 py-1.5 bg-[#0053e2] hover:bg-blue-700 text-white text-xs font-bold rounded-xl">+ Nueva tarea</button>
+        </div>
+        <div class="divide-y">
+        ${tasks.map(t => `
+          <div id="admin-row-${t.id}" class="flex items-start gap-3 px-5 py-3 ${t.activo?'':'bg-gray-50 opacity-60'}">
+            <div class="flex-1">
+              <p class="text-sm font-semibold ${t.activo?'':'line-through text-gray-400'}">${t.tarea}</p>
+              <p class="text-xs text-gray-400 mt-0.5">⏰ ${t.horario||'—'}</p>
+            </div>
+            <div class="flex gap-1 flex-shrink-0">
+              <button onclick="editTask(${t.id},'${cid}','${shift}')" class="px-2 py-1 bg-blue-100 hover:bg-blue-200 text-blue-700 text-xs font-bold rounded-lg">✏️</button>
+              <button onclick="toggleTask(${t.id},${t.activo})" class="px-2 py-1 ${t.activo?'bg-yellow-100 hover:bg-yellow-200 text-yellow-700':'bg-green-100 hover:bg-green-200 text-green-700'} text-xs font-bold rounded-lg">${t.activo?'⏸️':'▶️'}</button>
+              <button onclick="deleteTask(${t.id})" class="px-2 py-1 bg-red-100 hover:bg-red-200 text-red-600 text-xs font-bold rounded-lg">🗑️</button>
+            </div>
+          </div>`).join('')}
+        </div>
+      </div>`;
+    }
+  }
+  el.innerHTML = html;
+}
+
+async function seedTasks() {
+  if (!confirm('¿Cargar las tareas por defecto en la base de datos?')) return;
+  const rows = [];
+  let orden = 0;
+  for (const [cid, chk] of Object.entries(CHECKS))
+    for (const [shift, tasks] of Object.entries(chk.shifts))
+      for (const t of tasks)
+        rows.push({ check_type:cid, shift, task_id:t.id, horario:t.h, tarea:t.t, orden:orden++, activo:true });
+  const { error } = await sb.from('check_tasks').upsert(rows, { onConflict:'task_id' });
+  if (error) { toast('❌ '+error.message,'red'); return; }
+  toast('✅ Tareas cargadas');
+  renderAdmin();
+}
+
+function openAddTask(cid, shift) {
+  const tarea   = prompt('📝 Nombre de la tarea:');
+  if (!tarea?.trim()) return;
+  const horario = prompt('⏰ Horario (ej: 09:00–10:00) — opcional:') || '';
+  addTask(cid, shift, tarea.trim(), horario.trim());
+}
+
+async function addTask(cid, shift, tarea, horario) {
+  const task_id = `${cid}_${shift.toLowerCase()}_custom_${Date.now()}`;
+  const { error } = await sb.from('check_tasks')
+    .insert({ check_type:cid, shift, task_id, horario, tarea, orden:999, activo:true });
+  if (error) { toast('❌ '+error.message,'red'); return; }
+  toast('✅ Tarea agregada');
+  renderAdmin();
+}
+
+async function editTask(id, cid, shift) {
+  const { data } = await sb.from('check_tasks').select('*').eq('id',id).single();
+  if (!data) return;
+  const tarea   = prompt('📝 Editar tarea:', data.tarea);
+  if (tarea === null) return;
+  const horario = prompt('⏰ Editar horario:', data.horario||'');
+  if (horario === null) return;
+  const { error } = await sb.from('check_tasks').update({ tarea:tarea.trim(), horario:horario.trim() }).eq('id',id);
+  if (error) { toast('❌ '+error.message,'red'); return; }
+  toast('✅ Tarea actualizada');
+  renderAdmin();
+}
+
+async function toggleTask(id, activo) {
+  const { error } = await sb.from('check_tasks').update({ activo:!activo }).eq('id',id);
+  if (error) { toast('❌ '+error.message,'red'); return; }
+  toast(activo ? '⏸️ Tarea desactivada' : '▶️ Tarea activada');
+  renderAdmin();
+}
+
+async function deleteTask(id) {
+  if (!confirm('¿Eliminar esta tarea? No se puede deshacer.')) return;
+  const { error } = await sb.from('check_tasks').delete().eq('id',id);
+  if (error) { toast('❌ '+error.message,'red'); return; }
+  toast('🗑️ Tarea eliminada');
+  renderAdmin();
+}
+
+// Carga tareas de DB (si existen) y sobreescribe CHECKS en memoria
+async function loadTasksFromDB() {
+  const { data } = await sb.from('check_tasks').select('*').eq('activo',true).order('orden');
+  if (!data?.length) return; // usa CHECKS por defecto
+  // Reconstruye estructura CHECKS desde DB
+  for (const cid of Object.keys(CHECKS))
+    for (const shift of Object.keys(CHECKS[cid].shifts))
+      CHECKS[cid].shifts[shift] = [];
+  for (const t of data) {
+    if (!CHECKS[t.check_type]) continue;
+    if (!CHECKS[t.check_type].shifts[t.shift]) continue;
+    CHECKS[t.check_type].shifts[t.shift].push({ id:t.task_id, h:t.horario||t.shift, t:t.tarea });
+  }
+}
+
+// ── NAV ──────────────────────────────────────────────────────────────────────
+function showView(v) {
+  document.getElementById('view-check').classList.toggle('hidden',   v!=='check');
+  document.getElementById('view-history').classList.toggle('hidden', v!=='history');
+  document.getElementById('view-admin').classList.toggle('hidden',   v!=='admin');
+  if (v==='history') renderHistory();
+  if (v==='check')   renderCheck();
+  if (v==='admin')   renderAdmin();
+}
+function onDateChange() { currentDate=document.getElementById('hdr-date').value; renderCheck(); }
+function buildTabs() {
+  document.getElementById('check-tabs').innerHTML = Object.entries(CHECKS).map(([cid,c])=>
+    `<button onclick="switchCheck('${cid}')" class="px-4 py-1.5 rounded-t-lg text-sm font-bold border border-b-0 border-blue-400 ${cid===currentCheck?'tab-active':'bg-blue-700 text-blue-100 hover:bg-blue-600'}">${c.icon} ${c.label.split(' ').slice(0,2).join(' ')}</button>`
+  ).join('');
+}
+function switchCheck(cid) { currentCheck=cid; buildTabs(); renderCheck(); }
+function toast(msg, color='green') {
+  const t=document.getElementById('toast');
+  t.textContent=msg; t.className=`fixed bottom-4 right-4 z-50 px-4 py-2 rounded-lg shadow-lg text-sm font-bold text-white ${color==='red'?'bg-red-600':'bg-green-600'}`;
+  t.classList.remove('hidden'); setTimeout(()=>t.classList.add('hidden'),3000);
+}
+
+// ── INIT ──────────────────────────────────────────────────────────────────────
+document.getElementById('hdr-date').value = currentDate;
+buildTabs();
+sb = createClient(SB_URL, SB_KEY);
+document.getElementById('conn-status').textContent = '🟢 En línea';
+(async () => {
+  await loadTasksFromDB();
+  renderCheck();
+  setInterval(() => { if (document.visibilityState === 'visible') renderCheck(); }, 30000);
+})();
+</script>
+</body>
+</html>
