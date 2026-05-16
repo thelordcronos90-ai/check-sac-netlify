@@ -266,8 +266,15 @@ async function renderHistory() {
   const pbr = {};
   (photos||[]).forEach(p => { if(!pbr[p.record_id]) pbr[p.record_id]=[]; pbr[p.record_id].push(p); });
   // Agrupar: fecha → check_type → shift → [records]
+  // Deduplicar por task_id: si hay dos registros del mismo task en el mismo día/turno, queda el mas reciente
+  const seen = {};
+  const deduped = records.filter(r => {
+    const key = `${r.date}|${r.check_type}|${r.shift}|${r.task_id}`;
+    if (seen[key]) return false;
+    seen[key] = true; return true;
+  });
   const byDate = {};
-  records.forEach(r => {
+  deduped.forEach(r => {
     if(!byDate[r.date])                        byDate[r.date]={};
     if(!byDate[r.date][r.check_type])          byDate[r.date][r.check_type]={};
     if(!byDate[r.date][r.check_type][r.shift]) byDate[r.date][r.check_type][r.shift]=[];
@@ -393,7 +400,19 @@ async function sharePDF(blockId, date, checkLabel) {
   try {
     const noPrint = el.querySelectorAll('.no-print');
     noPrint.forEach(e => e.style.visibility = 'hidden');
-    const canvas = await html2canvas(el, { scale:2, useCORS:true, backgroundColor:'#ffffff', logging:false });
+    // Captura el elemento completo con sus dimensiones reales
+    const elW = el.scrollWidth;
+    const elH = el.scrollHeight;
+    const canvas = await html2canvas(el, {
+      scale: 1.5,
+      useCORS: true,
+      backgroundColor: '#ffffff',
+      logging: false,
+      width:  elW,
+      height: elH,
+      windowWidth:  elW,
+      windowHeight: elH,
+    });
     noPrint.forEach(e => e.style.visibility = '');
 
     const { jsPDF } = window.jspdf;
