@@ -159,9 +159,10 @@ async function renderCheck() {
         <div class="flex-1 bg-gray-200 rounded-full h-2"><div class="h-2 rounded-full ${bCls}" style="width:${pct}%"></div></div>
       </div>
       <div class="bg-white rounded-2xl border-2 border-gray-100 px-4flex items-center gap-3">
-        <span class="text-xs font-bold text-gray-500 whitespace-nowrap">👤 Responsable turno:</span>
-        <input type="text" id="resp-${shift}" value="${shiftResp}" placeholder="Nombre de quien realiza el turno"
-          class="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm bg-gray-50 focus:ring-2 focus:ring-[#0053e2] focus:outline-none"/>
+        <span class="text-xs font-bold text-gray-500 whitespace-nowrap">👤 Responsable turno: <span class="text-red-500">*</span></span>
+        <input type="text" id="resp-${shift}" value="${shiftResp}" placeholder="Nombre de quien realiza el turno (obligatorio)"
+          class="flex-1 border-2 border-gray-200 rounded-xl px-3 py-2 text-sm bg-gray-50 focus:ring-2 focus:ring-[#0053e2] focus:outline-none"
+          oninput="this.classList.remove('border-red-400')"/>
       </div>
       <div class="space-y-3">${cards}</div>
     </section>`;
@@ -226,6 +227,11 @@ async function saveTask(task_id, shift, e) {
   const btn = e.target; btn.textContent='⏳'; btn.disabled=true;
   try {
     const responsable = (document.getElementById(`resp-${shift}`)?.value||'').trim();
+    if (!responsable) {
+      toast('⚠️ Debes ingresar el responsable del turno', 'red');
+      document.getElementById(`resp-${shift}`)?.classList.add('border-red-400');
+      btn.textContent='Guardar 💾'; btn.disabled=false; return;
+    }
     const rec = await upsertRecord(currentCheck, currentDate, shift, task_id,
       responsable,
       document.getElementById(`chk-${task_id}`).checked ? 1 : 0,
