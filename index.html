@@ -10,7 +10,14 @@
 <style>
   .tab-active{background:#0053e2!important;color:#fff!important;border-color:#0053e2!important}
   .shift-am{border-left:4px solid #ffc220}.shift-pm{border-left:4px solid #0053e2}
-  @media print{.no-print{display:none!important}body{font-size:11px}}
+  @media print{
+    .no-print{display:none!important}
+    header{display:none!important}
+    #view-check{display:none!important}
+    #view-admin{display:none!important}
+    #view-history{display:block!important}
+    body{font-size:11px;background:white}
+  }
 </style>
 </head>
 <body class="bg-gray-50 min-h-screen text-gray-800">
@@ -137,6 +144,8 @@ async function renderCheck() {
     const pct  = tasks.length ? Math.round(done/tasks.length*100) : 0;
     const pCls = pct>=80?'bg-green-100 text-green-700':pct>=50?'bg-yellow-100 text-yellow-700':'bg-red-100 text-red-600';
     const bCls = pct>=80?'bg-green-500':pct>=50?'bg-yellow-400':'bg-red-400';
+    // Responsable del turno: usar el primero que exista en los registros
+    const shiftResp = tasks.map(t=>records[t.id]?.responsable).find(r=>r) || '';
     let cards = '';
     for (const task of tasks) {
       const rec    = records[task.id]||null;
@@ -148,6 +157,11 @@ async function renderCheck() {
         <span class="font-black text-base ${shift==='AM'?'text-yellow-700':'text-indigo-700'}">${shift==='AM'?'☀️':'🌙'} Turno ${shift}</span>
         <span class="text-xs font-bold px-2 py-0.5 rounded-full ${pCls}">${done}/${tasks.length} · ${pct}%</span>
         <div class="flex-1 bg-gray-200 rounded-full h-2"><div class="h-2 rounded-full ${bCls}" style="width:${pct}%"></div></div>
+      </div>
+      <div class="bg-white rounded-2xl border-2 border-gray-100 px-4flex items-center gap-3">
+        <span class="text-xs font-bold text-gray-500 whitespace-nowrap">👤 Responsable turno:</span>
+        <input type="text" id="resp-${shift}" value="${shiftResp}" placeholder="Nombre de quien realiza el turno"
+          class="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm bg-gray-50 focus:ring-2 focus:ring-[#0053e2] focus:outline-none"/>
       </div>
       <div class="space-y-3">${cards}</div>
     </section>`;
@@ -170,8 +184,6 @@ function buildCard(task, rec, photos, shift) {
       <span class="text-xs font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${done?'bg-green-100 text-green-700':'bg-yellow-50 text-yellow-700'}">${done?'✓ OK':'Pendiente'}</span>
     </div>
     <div class="px-4 pb-4 space-y-3">
-      <input type="text" id="resp-${task.id}" placeholder="👤 Responsable" value="${rec?.responsable||''}"
-        class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm bg-gray-50 focus:ring-2 focus:ring-[#0053e2] focus:outline-none"/>
       <textarea id="obs-${task.id}" rows="2" placeholder="📝 Observación / Comentario…"
         class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none bg-gray-50 focus:ring-2 focus:ring-[#0053e2] focus:outline-none">${rec?.observation||''}</textarea>
       <div>
@@ -192,15 +204,36 @@ function buildCard(task, rec, photos, shift) {
   </div>`;
 }
 
-// ── ACTIONS ───────────────────────────────────────────────────────────────────
+// ── ACTIONS ──────────────────────────────────────────────────────────────────
+// Comprime imagen antes de subir (máx 1024px, calidad 70%)
+function compressImage(file, maxPx=1024, quality=0.70) {
+  return new Promise(res => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxPx / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width  = Math.round(img.width  * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(blob => res(new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'),
+        { type:'image/jpeg' })), 'image/jpeg', quality);
+    };
+    img.src = URL.createObjectURL(file);
+  });
+}
+
 async function saveTask(task_id, shift, e) {
   const btn = e.target; btn.textContent='⏳'; btn.disabled=true;
   try {
+    const responsable = (document.getElementById(`resp-${shift}`)?.value||'').trim();
     const rec = await upsertRecord(currentCheck, currentDate, shift, task_id,
-      document.getElementById(`resp-${task_id}`).value.trim(),
+      responsable,
       document.getElementById(`chk-${task_id}`).checked ? 1 : 0,
       document.getElementById(`obs-${task_id}`).value.trim());
-    for (const f of document.getElementById(`file-${task_id}`).files) await uploadPhoto(f, rec.id);
+    for (const f of document.getElementById(`file-${task_id}`).files) {
+      const compressed = await compressImage(f);
+      await uploadPhoto(compressed, rec.id);
+    }
     toast('✅ Guardado en línea');
     renderCheck();
   } catch(err) { toast('❌ '+err.message,'red'); btn.textContent='Guardar 💾'; btn.disabled=false; }
@@ -330,13 +363,20 @@ async function renderHistory() {
 }
 
 function printBlock(blockId) {
-  const all = document.querySelectorAll('#view-history [id^="hist-"]');
+  const viewHistory = document.getElementById('view-history');
   const target = document.getElementById(blockId);
-  all.forEach(el => el._orig = el.style.display);
-  all.forEach(el => { el.style.display = el.id===blockId ? '' : 'none'; });
-  const parent = target?.parentElement;
-  if (parent?.id?.startsWith('hist-')) parent.style.display = '';
+  if (!target) return;
+  // Guarda y oculta todos los bloques hist-
+  const all = viewHistory.querySelectorAll('[id^="hist-"]');
+  all.forEach(el => { el._orig = el.style.display; el.style.display = 'none'; });
+  // Muestra el bloque objetivo Y todos sus ancestros hasta view-history
+  let node = target;
+  while (node && node !== viewHistory) {
+    node.style.display = '';
+    node = node.parentElement;
+  }
   window.print();
+  // Restaura todo
   all.forEach(el => { el.style.display = el._orig || ''; });
 }
 
@@ -347,31 +387,51 @@ async function sharePDF(blockId, date, checkLabel) {
   btn.textContent = '⏳ Generando...';
   btn.disabled = true;
   try {
-    // Ocultar botones temporalmente
     const noPrint = el.querySelectorAll('.no-print');
     noPrint.forEach(e => e.style.visibility = 'hidden');
-    const canvas = await html2canvas(el, { scale:2, useCORS:true, backgroundColor:'#ffffff' });
+    const canvas = await html2canvas(el, { scale:2, useCORS:true, backgroundColor:'#ffffff', logging:false });
     noPrint.forEach(e => e.style.visibility = '');
 
     const { jsPDF } = window.jspdf;
-    const pdf  = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' });
-    const imgW = 190;
-    const imgH = (canvas.height * imgW) / canvas.width;
-    const titulo = `${checkLabel} — ${date}`;
-    pdf.setFontSize(11);
-    pdf.setTextColor(0, 83, 226);
-    pdf.text(titulo, 10, 12);
-    pdf.addImage(canvas.toDataURL('image/jpeg', 0.85), 'JPEG', 10, 18, imgW, Math.min(imgH, 270));
+    const pdf     = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' });
+    const margin  = 10;
+    const pageW   = 210, pageH = 297;
+    const usableW = pageW - margin * 2;          // 190mm
+    const usableH = pageH - margin * 2;          // 277mm
+    const scale   = usableW / canvas.width;      // mm por pixel
+    const totalH  = canvas.height * scale;       // alto total en mm
+    const titulo  = `${checkLabel} — ${date}`;
+
+    let fromMM = 0, pageIdx = 0;
+    while (fromMM < totalH) {
+      if (pageIdx > 0) pdf.addPage();
+      // Primera pagina: reserva espacio para el titulo
+      const topY    = pageIdx === 0 ? margin + 10 : margin;
+      const avail   = pageH - topY - margin;
+      const sliceH  = Math.min(avail, totalH - fromMM);
+      // Recorta la porcion del canvas correspondiente
+      const fromPx  = Math.round(fromMM / scale);
+      const slicePx = Math.round(sliceH / scale);
+      const slice   = document.createElement('canvas');
+      slice.width   = canvas.width;
+      slice.height  = slicePx;
+      slice.getContext('2d').drawImage(canvas, 0, fromPx, canvas.width, slicePx, 0, 0, canvas.width, slicePx);
+      if (pageIdx === 0) {
+        pdf.setFontSize(11); pdf.setTextColor(0,83,226);
+        pdf.text(titulo, margin, margin + 6);
+      }
+      pdf.addImage(slice.toDataURL('image/jpeg', 0.82), 'JPEG', margin, topY, usableW, sliceH);
+      fromMM += sliceH;
+      pageIdx++;
+    }
 
     const fileName = `CheckSAC_${date}_${blockId}.pdf`;
     const pdfBlob  = pdf.output('blob');
     const pdfFile  = new File([pdfBlob], fileName, { type:'application/pdf' });
 
-    // Móvil → share nativo (WhatsApp, etc.)
     if (navigator.canShare && navigator.canShare({ files:[pdfFile] })) {
       await navigator.share({ title:titulo, text:`Check SAC — ${date}`, files:[pdfFile] });
     } else {
-      // Desktop → descarga el PDF
       pdf.save(fileName);
       toast('💾 PDF descargado — adjúntalo en WhatsApp');
     }
@@ -514,17 +574,17 @@ async function deleteTask(id) {
 
 // Carga tareas de DB (si existen) y sobreescribe CHECKS en memoria
 async function loadTasksFromDB() {
-  const { data } = await sb.from('check_tasks').select('*').eq('activo',true).order('orden');
-  if (!data?.length) return; // usa CHECKS por defecto
-  // Reconstruye estructura CHECKS desde DB
-  for (const cid of Object.keys(CHECKS))
-    for (const shift of Object.keys(CHECKS[cid].shifts))
-      CHECKS[cid].shifts[shift] = [];
-  for (const t of data) {
-    if (!CHECKS[t.check_type]) continue;
-    if (!CHECKS[t.check_type].shifts[t.shift]) continue;
-    CHECKS[t.check_type].shifts[t.shift].push({ id:t.task_id, h:t.horario||t.shift, t:t.tarea });
-  }
+  try {
+    const { data, error } = await sb.from('check_tasks').select('*').eq('activo',true).order('orden');
+    if (error || !data?.length) return; // tabla no existe aun o vacia, usa defaults
+    for (const cid of Object.keys(CHECKS))
+      for (const shift of Object.keys(CHECKS[cid].shifts))
+        CHECKS[cid].shifts[shift] = [];
+    for (const t of data) {
+      if (!CHECKS[t.check_type]?.shifts[t.shift]) continue;
+      CHECKS[t.check_type].shifts[t.shift].push({ id:t.task_id, h:t.horario||t.shift, t:t.tarea });
+    }
+  } catch(_) { /* tabla no creada aun, sigue con defaults */ }
 }
 
 // ── NAV ──────────────────────────────────────────────────────────────────────
@@ -557,7 +617,7 @@ document.getElementById('conn-status').textContent = '🟢 En línea';
 (async () => {
   await loadTasksFromDB();
   renderCheck();
-  setInterval(() => { if (document.visibilityState === 'visible') renderCheck(); }, 30000);
+  setInterval(() => { if (document.visibilityState === 'visible') renderCheck(); }, 300000); // 5 min
 })();
 </script>
 </body>
