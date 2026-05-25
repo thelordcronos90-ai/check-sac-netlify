@@ -7,6 +7,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
   .tab-active{background:#0053e2!important;color:#fff!important;border-color:#0053e2!important}
   .shift-am{border-left:4px solid #ffc220}.shift-pm{border-left:4px solid #0053e2}
@@ -37,6 +38,7 @@
         class="border border-blue-400 bg-blue-700 text-white rounded-lg px-3 py-1.5 text-sm focus:outline-none"
         onchange="onDateChange()"/>
       <button onclick="showView('history')" class="px-3 py-1.5 bg-blue-700 hover:bg-blue-600 rounded-lg text-sm font-semibold">🕒 Historial</button>
+      <button onclick="showView('adherencia')" class="px-3 py-1.5 bg-blue-700 hover:bg-blue-600 rounded-lg text-sm font-semibold">📊 Adherencia</button>
       <button onclick="askAdmin()" class="px-3 py-1.5 bg-blue-700 hover:bg-blue-600 rounded-lg text-sm font-semibold">⚙️ Admin</button>
 
     </div>
@@ -46,8 +48,9 @@
 
 <main class="max-w-3xl mx-auto px-4 py-5">
   <div id="view-check"></div>
-  <div id="view-history" class="hidden"></div>
-  <div id="view-admin"   class="hidden"></div>
+  <div id="view-history"    class="hidden"></div>
+  <div id="view-admin"      class="hidden"></div>
+  <div id="view-adherencia" class="hidden"></div>
 </main>
 <div id="toast" class="fixed bottom-4 right-4 z-50 px-4 py-2 rounded-lg shadow-lg text-sm font-bold text-white bg-green-600 hidden"></div>
 
@@ -610,14 +613,255 @@ async function loadTasksFromDB() {
   } catch(_) { /* tabla no creada aun, sigue con defaults */ }
 }
 
-// ── NAV ──────────────────────────────────────────────────────────────────────
+// ── ADHERENCIA ─────────────────────────────────────────────
+const ADH_CHARTS = {};
+
+function renderAdherencia() {
+  const el = document.getElementById('view-adherencia');
+  const today = new Date().toISOString().slice(0,10);
+  const from30 = new Date(Date.now() - 29*86400000).toISOString().slice(0,10);
+  el.innerHTML = `
+    <div class="flex items-center justify-between mb-5 flex-wrap gap-2">
+      <h2 class="text-lg font-black text-[#0053e2]">📊 Resumen de Adherencia</h2>
+      <button onclick="showView('check')" class="text-sm text-[#0053e2] font-semibold hover:underline">← Volver</button>
+    </div>
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-200 p-4 mb-5 flex flex-wrap gap-3 items-end">
+      <div>
+        <label class="text-xs font-semibold text-gray-500 uppercase block mb-1">Desde</label>
+        <input type="date" id="adh-from" value="${from30}"
+          class="border border-gray-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-[#0053e2] focus:outline-none"/>
+      </div>
+      <div>
+        <label class="text-xs font-semibold text-gray-500 uppercase block mb-1">Hasta</label>
+        <input type="date" id="adh-to" value="${today}"
+          class="border border-gray-300 rounded-xl px-3 py-2 text-sm focus:ring-2 focus:ring-[#0053e2] focus:outline-none"/>
+      </div>
+      <button onclick="loadAdh()" class="px-5 py-2 bg-[#0053e2] hover:bg-blue-700 text-white font-bold rounded-xl text-sm">📅 Ver Resumen</button>
+    </div>
+    <div id="adh-content">
+      <p class="text-center text-gray-400 py-8 text-sm">⏳ Cargando…</p>
+    </div>`;
+  loadAdh();
+}
+
+async function loadAdh() {
+  const from = document.getElementById('adh-from')?.value;
+  const to   = document.getElementById('adh-to')?.value;
+  if (!from || !to || from > to) { toast('Rango de fechas inválido', 'red'); return; }
+
+  const el = document.getElementById('adh-content');
+  el.innerHTML = '<p class="text-center text-gray-400 py-8">⏳ Cargando datos…</p>';
+
+  Object.values(ADH_CHARTS).forEach(c => c.destroy());
+  Object.keys(ADH_CHARTS).forEach(k => delete ADH_CHARTS[k]);
+
+  try {
+    const [mainRes, mantRes] = await Promise.all([
+      sb.from('check_records')
+        .select('check_type,date,shift,task_id,completed')
+        .gte('date', from).lte('date', to).order('date'),
+      sb.from('check_records')
+        .select('date,shift,observation,responsable,updated_at')
+        .in('task_id', ['limp_am_08', 'limp_pm_08'])
+        .not('observation', 'is', null)
+        .neq('observation', '')
+        .order('updated_at', { ascending: false })
+        .limit(1),
+    ]);
+    if (mainRes.error) throw mainRes.error;
+    const rows    = mainRes.data || [];
+    const lastMant = mantRes.data?.[0] || null;
+
+    const dates = [], cur = new Date(from + 'T00:00:00'), end = new Date(to + 'T00:00:00');
+    while (cur <= end) { dates.push(cur.toISOString().slice(0,10)); cur.setDate(cur.getDate()+1); }
+    const labels = dates.map(d => d.slice(5).replace('-','/'));
+    const today  = new Date().toISOString().slice(0,10);
+
+    const pctCls = p => p >= 80 ? 'text-green-700 bg-green-50' : p >= 50 ? 'text-yellow-700 bg-yellow-50' : 'text-red-700 bg-red-50';
+    const barCls = p => p >= 80 ? 'bg-green-500' : p >= 50 ? 'bg-yellow-400' : 'bg-red-500';
+
+    function shiftAdh(checkId, shift, dayRows) {
+      const tasks  = CHECKS[checkId]?.shifts[shift] || [];
+      if (!tasks.length) return null;
+      const taskIds = new Set(tasks.map(t => t.id));
+      const recs   = dayRows.filter(r => r.check_type===checkId && r.shift===shift && taskIds.has(r.task_id));
+      if (!recs.length) return null;
+      return Math.round(recs.filter(r => r.completed).length / tasks.length * 100);
+    }
+
+    const todayRows = rows.filter(r => r.date === today);
+    const SHIFTS_META = [
+      { key:'AM', icon:'☀️', label:'Turno AM',  badge:'bg-yellow-100 text-yellow-800', color:'#ffc220' },
+      { key:'PM', icon:'🌙', label:'Turno PM',  badge:'bg-indigo-100 text-indigo-700', color:'#0053e2' },
+    ];
+    const CHECK_STYLE = {
+      devoluciones: { border:'border-orange-200', hdr:'bg-orange-50' },
+      limpieza:     { border:'border-teal-200',   hdr:'bg-teal-50'   },
+    };
+
+    // Global KPIs
+    let gDone = 0, gTotal = 0;
+    for (const [cid, chk] of Object.entries(CHECKS))
+      for (const [sh, tasks] of Object.entries(chk.shifts)) {
+        const ids = new Set(tasks.map(t => t.id));
+        const rr  = rows.filter(r => r.check_type===cid && r.shift===sh && ids.has(r.task_id));
+        gTotal += rr.length;
+        gDone  += rr.filter(r => r.completed).length;
+      }
+    const gPct = gTotal ? Math.round(gDone/gTotal*100) : 0;
+    const insightCls = gPct>=80?'bg-green-50 border-green-200 text-green-700':gPct>=50?'bg-yellow-50 border-yellow-200 text-yellow-800':'bg-red-50 border-red-200 text-red-700';
+    const insight = gPct>=80?'🎯 <strong>Excelente adherencia.</strong> Sobre el 80% en el período.':gPct>=50?'⚠️ <strong>Adherencia media.</strong> Hay oportunidades de mejora.':'🚨 <strong>Adherencia crítica.</strong> Menos del 50% — acción inmediata.';
+
+    const sections = Object.entries(CHECKS).map(([cid, chk]) => {
+      const cc = CHECK_STYLE[cid] || { border:'border-gray-200', hdr:'bg-gray-50' };
+      const tableRows = SHIFTS_META.map(sm => {
+        const tasks  = chk.shifts[sm.key] || [];
+        const taskIds = new Set(tasks.map(t => t.id));
+        const recs   = todayRows.filter(r => r.check_type===cid && r.shift===sm.key && taskIds.has(r.task_id));
+        const done   = recs.filter(r => r.completed).length;
+        const pct    = recs.length ? Math.round(done/tasks.length*100) : null;
+        return `<tr class="hover:bg-gray-50">
+          <td class="px-4 py-2.5"><span class="text-xs font-bold px-2 py-0.5 rounded-full ${sm.badge}">${sm.icon} ${sm.label}</span></td>
+          <td class="px-4 py-2.5 text-center text-gray-500 text-sm">${tasks.length}</td>
+          <td class="px-4 py-2.5 text-center text-green-700 font-semibold text-sm">${recs.length?done:'—'}</td>
+          <td class="px-4 py-2.5">${pct!==null
+            ? `<div class="flex items-center gap-2"><div class="flex-1 bg-gray-200 rounded-full h-2"><div class="h-2 rounded-full ${barCls(pct)}" style="width:${pct}%"></div></div><span class="text-xs font-bold ${pctCls(pct)} px-1.5 py-0.5 rounded w-10 text-center">${pct}%</span></div>`
+            : '<span class="text-gray-300 text-sm">— sin datos</span>'}
+          </td>
+        </tr>`;
+      }).join('');
+      return `
+      <div class="bg-white rounded-2xl shadow-sm border-2 ${cc.border} overflow-hidden mb-5">
+        <div class="px-5 py-3 border-b flex items-center gap-2 ${cc.hdr}">
+          <span class="text-xl">${chk.icon}</span>
+          <h3 class="font-black text-gray-800">${chk.label}</h3>
+        </div>
+        <div class="p-4">
+          <p class="text-xs font-semibold text-gray-500 uppercase mb-2">Hoy (${today})</p>
+          <div class="overflow-x-auto mb-5">
+            <table class="w-full text-sm">
+              <thead class="bg-gray-50 text-xs text-gray-500 uppercase">
+                <tr>
+                  <th class="px-4 py-2 text-left">Turno</th>
+                  <th class="px-4 py-2 text-center">Total tareas</th>
+                  <th class="px-4 py-2 text-center">✓ Cumplidas</th>
+                  <th class="px-4 py-2 text-left">Adherencia</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-50">${tableRows}</tbody>
+            </table>
+          </div>
+          <p class="text-xs font-semibold text-gray-500 uppercase mb-2">Evolución ${from} → ${to}</p>
+          <div style="position:relative;height:260px"><canvas id="adh-chart-${cid}"></canvas></div>
+          ${cid === 'limpieza' ? `
+          <div class="mt-4 rounded-xl border-2 p-4 ${lastMant
+            ? 'bg-blue-50 border-blue-200'
+            : 'bg-gray-50 border-gray-200'}">
+            <p class="text-xs font-bold uppercase mb-2 ${lastMant ? 'text-blue-600' : 'text-gray-400'}">
+              🚿 Última observación — Mantención baños (llaves, tazas, luces)
+            </p>
+            ${lastMant
+              ? `<p class="text-sm text-gray-800 italic mb-2">"​${lastMant.observation}​"</p>
+                 <p class="text-xs text-gray-400">
+                   📅 ${lastMant.date}
+                   &nbsp;·&nbsp; Turno ${lastMant.shift}
+                   &nbsp;·&nbsp; 👤 ${lastMant.responsable || '—'}
+                 </p>`
+              : '<p class="text-sm text-gray-400">Sin observaciones registradas aún.</p>'}
+          </div>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+
+    el.innerHTML = `
+      <div class="grid grid-cols-3 gap-3 mb-5">
+        <div class="bg-white rounded-2xl border shadow-sm p-4 text-center">
+          <p class="text-xs text-gray-500 font-semibold uppercase mb-1">Adherencia Global</p>
+          <span class="text-4xl font-black inline-block px-3 py-1 rounded-xl ${pctCls(gPct)}">${gPct}%</span>
+        </div>
+        <div class="bg-white rounded-2xl border shadow-sm p-4 text-center">
+          <p class="text-xs text-gray-500 font-semibold uppercase mb-1">✓ Cumplidas</p>
+          <p class="text-3xl font-black text-green-600">${gDone}<span class="text-lg text-gray-400">/${gTotal}</span></p>
+        </div>
+        <div class="bg-white rounded-2xl border shadow-sm p-4 text-center">
+          <p class="text-xs text-gray-500 font-semibold uppercase mb-1">📅 Días</p>
+          <p class="text-3xl font-black text-gray-700">${dates.length}</p>
+        </div>
+      </div>
+      <div class="border rounded-xl px-4 py-3 text-sm mb-5 ${insightCls}">${insight}</div>
+      ${sections}
+      ${!rows.length ? '<div class="bg-yellow-50 border border-yellow-200 rounded-xl p-4 text-sm text-yellow-800 text-center">⚠️ No hay registros en este rango de fechas.</div>' : ''}`;
+
+    // Mount charts — grouped bar per shift
+    const barColor = p => p === null ? 'rgba(200,200,200,0.4)'
+                        : p >= 80   ? 'rgba(42,135,3,0.85)'
+                        : p >= 50   ? 'rgba(255,194,32,0.85)'
+                        :             'rgba(234,17,0,0.85)';
+
+    Object.entries(CHECKS).forEach(([cid]) => {
+      const canvas = document.getElementById('adh-chart-' + cid);
+      if (!canvas) return;
+      const datasets = SHIFTS_META.map(sm => {
+        const data = dates.map(d => shiftAdh(cid, sm.key, rows.filter(r => r.date===d)));
+        return {
+          label: sm.label,
+          data,
+          backgroundColor: data.map(barColor),
+          borderColor:     data.map(p => p === null ? 'rgba(200,200,200,0.6)'
+                                       : p >= 80   ? '#2a8703'
+                                       : p >= 50   ? '#b38500'
+                                       :             '#ea1100'),
+          borderWidth: 1.5,
+          borderRadius: 4,
+          borderSkipped: false,
+        };
+      });
+      ADH_CHARTS[cid] = new Chart(canvas.getContext('2d'), {
+        type: 'bar',
+        data: { labels, datasets },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          interaction: { mode: 'index', intersect: false },
+          plugins: {
+            legend: { position: 'top', labels: { font: { size: 11 }, usePointStyle: true } },
+            tooltip: {
+              callbacks: {
+                label: ctx => ctx.parsed.y === null
+                  ? ctx.dataset.label + ': sin datos'
+                  : ctx.dataset.label + ': ' + ctx.parsed.y + '%'
+              }
+            }
+          },
+          scales: {
+            x: {
+              ticks: { maxRotation: 45, font: { size: 10 } },
+              grid: { display: false }
+            },
+            y: {
+              min: 0, max: 100,
+              ticks: { callback: v => v + '%', font: { size: 10 }, stepSize: 20 },
+              grid: { color: 'rgba(0,0,0,0.06)' }
+            }
+          }
+        }
+      });
+    });
+  } catch(err) {
+    document.getElementById('adh-content').innerHTML =
+      `<div class="bg-red-50 border border-red-200 rounded-xl p-6 text-red-700 text-sm"><strong>❌ Error:</strong> ${err.message}</div>`;
+  }
+}
+
+// ── NAV ────────────────────────────────────────────────
 function showView(v) {
-  document.getElementById('view-check').classList.toggle('hidden',   v!=='check');
-  document.getElementById('view-history').classList.toggle('hidden', v!=='history');
-  document.getElementById('view-admin').classList.toggle('hidden',   v!=='admin');
-  if (v==='history') renderHistory();
-  if (v==='check')   renderCheck();
-  if (v==='admin')   renderAdmin();
+  document.getElementById('view-check').classList.toggle('hidden',      v!=='check');
+  document.getElementById('view-history').classList.toggle('hidden',    v!=='history');
+  document.getElementById('view-admin').classList.toggle('hidden',      v!=='admin');
+  document.getElementById('view-adherencia').classList.toggle('hidden', v!=='adherencia');
+  if (v==='history')    renderHistory();
+  if (v==='check')      renderCheck();
+  if (v==='admin')      renderAdmin();
+  if (v==='adherencia') renderAdherencia();
 }
 function onDateChange() { currentDate=document.getElementById('hdr-date').value; renderCheck(); }
 function buildTabs() {
