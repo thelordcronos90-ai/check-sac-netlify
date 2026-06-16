@@ -4,7 +4,6 @@
 <meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>Check SAC</title>
 <script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -55,7 +54,131 @@
 <div id="toast" class="fixed bottom-4 right-4 z-50 px-4 py-2 rounded-lg shadow-lg text-sm font-bold text-white bg-green-600 hidden"></div>
 
 <script>
-const createClient = supabase.createClient;
+// ── SUPABASE SHIM — fetch() puro, sin CDN ──────────────────────────────
+const SB_URL = 'https://cluynjqkcxhhtrrqnahh.supabase.co';
+const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNsdXluanFrY3hoaHRycnFuYWhoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg4ODAzNDEsImV4cCI6MjA5NDQ1NjM0MX0.ZZPjSZx9qaCvX_t2aIvAp8m5BHq9_a2SWAadOQxazNA';
+const SB_H = { apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY, 'Content-Type': 'application/json' };
+
+function sbFetch(path, opts) {
+  return fetch(SB_URL + path, Object.assign({ headers: SB_H }, opts))
+    .then(function(r) {
+      var ct = r.headers.get('content-type') || '';
+      if (ct.indexOf('json') > -1) {
+        return r.json().then(function(d) { return { data: r.ok ? d : null, error: r.ok ? null : d }; });
+      }
+      return { data: null, error: r.ok ? null : { message: r.status } };
+    })
+    .catch(function(e) { return { data: null, error: e }; });
+}
+
+var sb = {
+  from: function(table) {
+    var filters = [], orders = [], selCols = '*', isSingle = false;
+    var limitN = null;
+    var api = {
+      select:  function(c) { selCols = c || '*'; return api; },
+      eq:      function(c, v) { filters.push(c + '=eq.'  + encodeURIComponent(v)); return api; },
+      neq:     function(c, v) { filters.push(c + '=neq.' + encodeURIComponent(v)); return api; },
+      gte:     function(c, v) { filters.push(c + '=gte.' + encodeURIComponent(v)); return api; },
+      lte:     function(c, v) { filters.push(c + '=lte.' + encodeURIComponent(v)); return api; },
+      gt:      function(c, v) { filters.push(c + '=gt.'  + encodeURIComponent(v)); return api; },
+      lt:      function(c, v) { filters.push(c + '=lt.'  + encodeURIComponent(v)); return api; },
+      in:      function(c, a) { filters.push(c + '=in.(' + a.map(function(x){return encodeURIComponent(x);}).join(',') + ')'); return api; },
+      not:     function(c, op, v) { filters.push(c + '=not.' + op + '.' + (v === null ? 'null' : encodeURIComponent(v))); return api; },
+      is:      function(c, v) { filters.push(c + '=is.' + (v === null ? 'null' : encodeURIComponent(v))); return api; },
+      like:    function(c, v) { filters.push(c + '=like.' + encodeURIComponent(v)); return api; },
+      limit:   function(n) { limitN = n; return api; },
+      order:   function(c, o) { orders.push(c + '.' + ((!o || o.ascending !== false) ? 'asc' : 'desc')); return api; },
+      single:  function() { isSingle = true; return api; },
+      then:   function(resolve, reject) {
+        var qs = ['select=' + selCols].concat(filters);
+        if (orders.length) qs.push('order=' + orders.join(','));
+        if (limitN !== null) qs.push('limit=' + limitN);
+        var h = Object.assign({}, SB_H);
+        if (isSingle) h['Accept'] = 'application/vnd.pgrst.object+json';
+        return fetch(SB_URL + '/rest/v1/' + table + '?' + qs.join('&'), { headers: h })
+          .then(function(r) {
+            return r.text().then(function(t) {
+              var d = t ? JSON.parse(t) : null;
+              return resolve({ data: d, error: r.ok ? null : { message: t } });
+            });
+          }).catch(function(e) { return resolve({ data: null, error: e }); });
+      },
+      insert: function(body) {
+        return sbFetch('/rest/v1/' + table, { method: 'POST',
+          headers: Object.assign({}, SB_H, { Prefer: 'return=representation' }),
+          body: JSON.stringify(body) });
+      },
+      upsert: function(body, opts) {
+        var _single = false;
+        var api = {
+          select: function() { return api; },
+          single: function() { _single = true; return api; },
+          then: function(resolve, reject) {
+            var h = Object.assign({}, SB_H, { Prefer: 'resolution=merge-duplicates,return=representation' });
+            if (_single) h['Accept'] = 'application/vnd.pgrst.object+json';
+            // 🐛 Fix: pasar on_conflict como query param para que PostgREST
+            // sepa qué constraint usar al resolver duplicados
+            var url = SB_URL + '/rest/v1/' + table;
+            if (opts && opts.onConflict) {
+              url += '?on_conflict=' + encodeURIComponent(opts.onConflict);
+            }
+            return fetch(url, {
+              method: 'POST', headers: h, body: JSON.stringify(body)
+            }).then(function(r) {
+              return r.text().then(function(t) {
+                var d = t ? JSON.parse(t) : null;
+                return resolve({ data: d, error: r.ok ? null : { message: t } });
+              });
+            }).catch(function(e) { return resolve({ data: null, error: e }); });
+          }
+        };
+        return api;
+      },
+      update: function(body) {
+        return {
+          eq: function(c, v) {
+            return sbFetch('/rest/v1/' + table + '?' + c + '=eq.' + encodeURIComponent(v),
+              { method: 'PATCH', headers: Object.assign({}, SB_H, { Prefer: 'return=representation' }),
+                body: JSON.stringify(body) });
+          }
+        };
+      },
+      delete: function() {
+        return {
+          eq: function(c, v) {
+            return sbFetch('/rest/v1/' + table + '?' + c + '=eq.' + encodeURIComponent(v),
+              { method: 'DELETE', headers: SB_H });
+          }
+        };
+      }
+    };
+    return api;
+  },
+  storage: {
+    from: function(bucket) {
+      return {
+        upload: function(path, file) {
+          return fetch(SB_URL + '/storage/v1/object/' + bucket + '/' + path, {
+            method: 'POST', headers: { apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY },
+            body: file })
+            .then(function(r) { return { error: r.ok ? null : { message: r.status } }; })
+            .catch(function(e) { return { error: e }; });
+        },
+        getPublicUrl: function(path) {
+          return { data: { publicUrl: SB_URL + '/storage/v1/object/public/' + bucket + '/' + path } };
+        },
+        remove: function(paths) {
+          return fetch(SB_URL + '/storage/v1/object/' + bucket, {
+            method: 'DELETE', headers: SB_H, body: JSON.stringify({ prefixes: paths }) })
+            .then(function(r) { return { error: r.ok ? null : { message: r.status } }; })
+            .catch(function(e) { return { error: e }; });
+        }
+      };
+    }
+  }
+};
+
 
 // ── TASK DATA ─────────────────────────────────────────────────────────────────
 const CHECKS = {
@@ -64,10 +187,12 @@ const CHECKS = {
       {id:'dev_am_01',h:'09:00–10:00',t:'Ronda de recuperación productos perecibles del lineal'},
       {id:'dev_am_02',h:'10:00–11:00',t:'Revisión de fechas muebles (panadería/pastelería/comidas) para alerta temprana'},
       {id:'dev_am_03',h:'11:00–12:00',t:'Segunda ronda de recuperación de productos'},
+      {id:'dev_am_04',h:'14:00–15:00',t:'Tercera ronda de devoluciones perecibles'},
     ],
     PM:[
       {id:'dev_pm_01',h:'16:00–17:00',t:'Primera ronda de recuperación devoluciones perecibles'},
       {id:'dev_pm_02',h:'18:00–19:00',t:'Segunda ronda recuperación devoluciones'},
+      {id:'dev_pm_03',h:'20:00–21:00',t:'Tercera ronda recuperación devoluciones'},
     ],
   }},
   limpieza:{label:'Check Limpieza y Mantención',icon:'🧹',shifts:{
@@ -94,10 +219,7 @@ const CHECKS = {
   }},
 };
 
-// ── STATE ─────────────────────────────────────────────────────────────────────
-const SB_URL = 'https://cluynjqkcxhhtrrqnahh.supabase.co';
-const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNsdXluanFrY3hoaHRycnFuYWhoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg4ODAzNDEsImV4cCI6MjA5NDQ1NjM0MX0.ZZPjSZx9qaCvX_t2aIvAp8m5BHq9_a2SWAadOQxazNA';
-let sb = null;
+// ── STATE ────────────────────────────────────────────────────────────────────────────────
 let currentCheck = 'devoluciones';
 let currentDate  = new Date().toISOString().slice(0,10);
 
@@ -118,17 +240,20 @@ async function fetchPhotos(record_id) {
   return data||[];
 }
 async function uploadPhoto(file, record_id) {
-  const ext = file.name.split('.').pop().toLowerCase();
-  const path = `${record_id}/${Date.now()}.${ext}`;
-  const {error} = await sb.storage.from('sac-photos').upload(path, file);
-  if (error) throw error;
-  const {data:{publicUrl}} = sb.storage.from('sac-photos').getPublicUrl(path);
-  await sb.from('check_photos').insert({record_id, photo_url:publicUrl, orig_name:file.name});
-  return publicUrl;
+  // Guardar como base64 directamente en la DB (evita Supabase Storage bloqueado por proxy)
+  const dataUrl = await new Promise((res, rej) => {
+    const reader = new FileReader();
+    reader.onload  = e => res(e.target.result);
+    reader.onerror = rej;
+    reader.readAsDataURL(file);
+  });
+  const {error} = await sb.from('check_photos')
+    .insert({record_id, photo_url: dataUrl, orig_name: file.name});
+  if (error) throw new Error(error.message || 'Error al guardar foto');
+  return dataUrl;
 }
 async function removePhoto(photo_id, photo_url) {
-  const path = photo_url.split('/object/public/sac-photos/')[1];
-  if (path) await sb.storage.from('sac-photos').remove([path]);
+  // Solo elimina el registro DB (no hay storage externo)
   await sb.from('check_photos').delete().eq('id', photo_id);
 }
 
@@ -189,8 +314,8 @@ function buildCard(task, rec, photos, shift) {
       <textarea id="obs-${task.id}" rows="2" placeholder="📝 Observación / Comentario…"
         class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm resize-none bg-gray-50 focus:ring-2 focus:ring-[#0053e2] focus:outline-none">${rec?.observation||''}</textarea>
       <div>
-        <label class="text-xs font-semibold text-gray-400 block mb-1">📷 Agregar fotos (pueden ser varias)</label>
-        <input type="file" id="file-${task.id}" multiple accept="image/*" capture="environment"
+        <label class="text-xs font-semibold text-gray-400 block mb-1">📷 Agregar fotos (cámara o galería)</label>
+        <input type="file" id="file-${task.id}" multiple accept="image/*"
           class="w-full text-sm text-gray-500 file:mr-3 file:py-1.5 file:px-4 file:rounded-xl file:border-0 file:text-sm file:font-semibold file:bg-[#0053e2] file:text-white hover:file:bg-blue-700 cursor-pointer"/>
       </div>
       ${photos.length?`<div class="flex flex-wrap gap-2">${photoHTML}</div>`:''}
@@ -237,9 +362,14 @@ async function saveTask(task_id, shift, e) {
       responsable,
       document.getElementById(`chk-${task_id}`).checked ? 1 : 0,
       document.getElementById(`obs-${task_id}`).value.trim());
-    for (const f of document.getElementById(`file-${task_id}`).files) {
-      const compressed = await compressImage(f);
-      await uploadPhoto(compressed, rec.id);
+    const files = Array.from(document.getElementById(`file-${task_id}`).files);
+    if (files.length) {
+      btn.textContent = `⏳ Subiendo fotos (0/${files.length})…`;
+      for (let i = 0; i < files.length; i++) {
+        btn.textContent = `⏳ Foto ${i+1}/${files.length}…`;
+        const compressed = await compressImage(files[i]);
+        await uploadPhoto(compressed, rec.id);
+      }
     }
     toast('✅ Guardado en línea');
     renderCheck();
@@ -879,7 +1009,7 @@ function toast(msg, color='green') {
 // ── INIT ──────────────────────────────────────────────────────────────────────
 document.getElementById('hdr-date').value = currentDate;
 buildTabs();
-sb = createClient(SB_URL, SB_KEY);
+// sb ya inicializado arriba via fetch()
 document.getElementById('conn-status').textContent = '🟢 En línea';
 (async () => {
   await loadTasksFromDB();
