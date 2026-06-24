@@ -182,20 +182,20 @@ var sb = {
 
 // ── TASK DATA ─────────────────────────────────────────────────────────────────
 const CHECKS = {
-  devoluciones:{label:'Check Devoluciones y Revisión de Fechas',icon:'📦',shifts:{
+  devoluciones:{label:'Check Devoluciones y Revisión de Fechas',icon:'',shifts:{
     AM:[
-      {id:'dev_am_01',h:'09:00–10:00',t:'Ronda de recuperación productos perecibles del lineal'},
-      {id:'dev_am_02',h:'10:00–11:00',t:'Revisión de fechas muebles (panadería/pastelería/comidas) para alerta temprana'},
-      {id:'dev_am_03',h:'11:00–12:00',t:'Segunda ronda de recuperación de productos'},
-      {id:'dev_am_04',h:'14:00–15:00',t:'Tercera ronda de devoluciones perecibles'},
+      {id:'dev_am_01',h:'09:00—10:00',t:'Ronda de recuperación productos perecibles del lineal'},
+      {id:'dev_am_02',h:'10:00—11:00',t:'Revisión de fechas muebles (panadería/pastelería/comidas) para alerta temprana'},
+      {id:'dev_am_03',h:'11:00—12:00',t:'Segunda ronda de recuperación de productos'},
+      {id:'dev_am_04',h:'14:00—15:00',t:'Tercera ronda de devoluciones perecibles'},
     ],
     PM:[
-      {id:'dev_pm_01',h:'16:00–17:00',t:'Primera ronda de recuperación devoluciones perecibles'},
-      {id:'dev_pm_02',h:'18:00–19:00',t:'Segunda ronda recuperación devoluciones'},
-      {id:'dev_pm_03',h:'20:00–21:00',t:'Tercera ronda recuperación devoluciones'},
+      {id:'dev_pm_01',h:'16:00—17:00',t:'Primera ronda de recuperación devoluciones perecibles'},
+      {id:'dev_pm_02',h:'18:00—19:00',t:'Segunda ronda recuperación devoluciones'},
+      {id:'dev_pm_03',h:'20:00—21:00',t:'Tercera ronda recuperación devoluciones'},
     ],
   }},
-  limpieza:{label:'Check Limpieza y Mantención',icon:'🧹',shifts:{
+  limpieza:{label:'Check Limpieza y Mantención',icon:'',shifts:{
     AM:[
       {id:'limp_am_01',h:'AM',t:'Revisión basureros exteriores'},
       {id:'limp_am_02',h:'AM',t:'Revisión limpieza accesos'},
@@ -215,6 +215,22 @@ const CHECKS = {
       {id:'limp_pm_06',h:'PM',t:'Limpieza sector escala mecánica y convencional'},
       {id:'limp_pm_07',h:'PM',t:'Limpieza de baños (papeleros, piso, lavamanos)'},
       {id:'limp_pm_08',h:'PM',t:'Mantención baños (llaves, tazas, luces)'},
+    ],
+  }},
+  precio:{label:'Check Comunicación de Precio',icon:'',shifts:{
+    AM:[
+      {id:'precio_am_01',h:'AM',t:'Revisión de flejes faltantes en cabeceras de góndola'},
+      {id:'precio_am_02',h:'AM',t:'Verificación de precios en flejes versus balanza de autoservicio'},
+      {id:'precio_am_03',h:'AM',t:'Verificación de cartelera EDLP (El Dueño del Ahorro / Precios Bajos)'},
+      {id:'precio_am_04',h:'AM',t:'Revisión de flejes de precios en pasillos promocionales'},
+      {id:'precio_am_05',h:'AM',t:'Habilitación e impresión de flejes de cambios de precio del día'},
+    ],
+    PM:[
+      {id:'precio_pm_01',h:'PM',t:'Revisión de flejes faltantes en cabeceras de góndola'},
+      {id:'precio_pm_02',h:'PM',t:'Verificación de cartelera promocional y carteles colgantes'},
+      {id:'precio_pm_03',h:'PM',t:'Auditoría aleatoria de precios con terminal RF / PDA'},
+      {id:'precio_pm_04',h:'PM',t:'Retiro de cartelera promocional vencida o fuera de fecha'},
+      {id:'precio_pm_05',h:'PM',t:'Revisión de flejes de precios en lineales clave de alta rotación'},
     ],
   }},
 };
