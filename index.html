@@ -219,18 +219,12 @@ const CHECKS = {
   }},
   precio:{label:'Check Comunicación de Precio',icon:'',shifts:{
     AM:[
-      {id:'precio_am_01',h:'AM',t:'Revisión de flejes faltantes en cabeceras de góndola'},
-      {id:'precio_am_02',h:'AM',t:'Verificación de precios en flejes versus balanza de autoservicio'},
-      {id:'precio_am_03',h:'AM',t:'Verificación de cartelera EDLP (El Dueño del Ahorro / Precios Bajos)'},
-      {id:'precio_am_04',h:'AM',t:'Revisión de flejes de precios en pasillos promocionales'},
-      {id:'precio_am_05',h:'AM',t:'Habilitación e impresión de flejes de cambios de precio del día'},
+      {id:'precio_am_01',h:'AM',t:'Cabeceras con problemas de precio'},
+      {id:'precio_am_02',h:'AM',t:'Islas con problemas de precio'},
     ],
     PM:[
-      {id:'precio_pm_01',h:'PM',t:'Revisión de flejes faltantes en cabeceras de góndola'},
-      {id:'precio_pm_02',h:'PM',t:'Verificación de cartelera promocional y carteles colgantes'},
-      {id:'precio_pm_03',h:'PM',t:'Auditoría aleatoria de precios con terminal RF / PDA'},
-      {id:'precio_pm_04',h:'PM',t:'Retiro de cartelera promocional vencida o fuera de fecha'},
-      {id:'precio_pm_05',h:'PM',t:'Revisión de flejes de precios en lineales clave de alta rotación'},
+      {id:'precio_pm_01',h:'PM',t:'Cabeceras con problemas de precio'},
+      {id:'precio_pm_02',h:'PM',t:'Islas con problemas de precio'},
     ],
   }},
 };
@@ -308,6 +302,14 @@ async function renderCheck() {
       </div>
       <div class="space-y-3">${cards}</div>
     </section>`;
+  }
+  if (currentCheck === 'precio') {
+    html += `<div class="mt-6 p-5 bg-white rounded-2xl border-2 border-dashed border-blue-200 text-center shadow-sm">
+      <p class="text-sm font-semibold text-gray-500 mb-3">¿Finalizaste el recorrido de Comunicación de Precio?</p>
+      <button onclick="generatePrecioPDF()" class="w-full md:w-auto px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-xl text-sm transition-all flex items-center justify-center gap-2 shadow shadow-green-500/20 mx-auto">
+        Finalizar y Generar PDF de Oportunidades
+      </button>
+    </div>`;
   }
   document.getElementById('view-check').innerHTML = html;
 }
@@ -538,6 +540,109 @@ function printBlock(blockId) {
   window.print();
   // Restaura todo
   all.forEach(el => { el.style.display = el._orig || ''; });
+}
+
+async function generatePrecioPDF() {
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  
+  // Header slide
+  pdf.setFillColor(0, 83, 226); // Walmart Blue
+  pdf.rect(0, 0, 210, 30, 'F');
+  
+  pdf.setTextColor(255, 255, 255);
+  pdf.setFontSize(16);
+  pdf.setFont('helvetica', 'bold');
+  pdf.text('REPORTE DE OPORTUNIDADES EN PRECIO', 15, 12);
+  pdf.setFontSize(11);
+  pdf.text('Comunicación de Precio — Lider', 15, 19);
+  pdf.text('Fecha: ' + currentDate, 150, 19);
+  
+  const check = CHECKS['precio'];
+  const records = await fetchRecordsMap('precio', currentDate);
+  
+  let y = 42;
+  
+  for (const [shift, tasks] of Object.entries(check.shifts)) {
+    // Add page if needed
+    if (y > 230) {
+      pdf.addPage();
+      y = 20;
+    }
+    
+    pdf.setTextColor(0, 83, 226);
+    pdf.setFontSize(13);
+    pdf.setFont('helvetica', 'bold');
+    pdf.text('Turno ' + shift, 15, y);
+    y += 8;
+    
+    // Responsable
+    const shiftResp = tasks.map(t=>records[t.id]?.responsable).find(r=>r) || 'No registrado';
+    pdf.setTextColor(100, 116, 139);
+    pdf.setFontSize(9.5);
+    pdf.setFont('helvetica', 'normal');
+    pdf.text('Responsable del Turno: ' + shiftResp, 15, y);
+    y += 10;
+    
+    for (const task of tasks) {
+      const rec = records[task.id];
+      const obs = rec?.observation || 'Sin observaciones registradas.';
+      const completed = rec?.completed ? 'SÍ' : 'NO';
+      const photos = rec ? await fetchPhotos(rec.id) : [];
+      
+      // Page break check
+      if (y > 230) {
+        pdf.addPage();
+        y = 20;
+      }
+      
+      pdf.setTextColor(30, 41, 59);
+      pdf.setFontSize(11);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text('• ' + task.t, 15, y);
+      y += 6;
+      
+      pdf.setFontSize(9.5);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(71, 85, 105);
+      pdf.text('Estado: ' + (rec?.completed ? 'OPORTUNIDAD REPORTADA' : 'CONFORME / SIN OBSERVACIONES'), 20, y);
+      y += 5;
+      
+      pdf.text('Comentarios: ' + obs, 20, y);
+      y += 8;
+      
+      if (photos.length > 0) {
+        // Page break check for photos
+        if (y > 210) {
+          pdf.addPage();
+          y = 20;
+        }
+        
+        pdf.text('Evidencias Fotográficas:', 20, y);
+        y += 4;
+        let imgX = 20;
+        for (const p of photos) {
+          try {
+            pdf.addImage(p.photo_url, 'JPEG', imgX, y, 40, 40);
+            imgX += 45;
+            if (imgX > 160) {
+              imgX = 20;
+              y += 45;
+            }
+          } catch (e) {
+            console.error("Error drawing image in PDF", e);
+          }
+        }
+        if (imgX !== 20) {
+          y += 45;
+        }
+        y += 5;
+      }
+    }
+    y += 5;
+  }
+  
+  pdf.save(`Reporte_Precio_Oportunidades_${currentDate}.pdf`);
 }
 
 async function sharePDF(blockId, date, checkLabel) {
