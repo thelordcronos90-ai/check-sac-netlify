@@ -855,9 +855,14 @@ async function loadTasksFromDB() {
   try {
     const { data, error } = await sb.from('check_tasks').select('*').eq('activo',true).order('orden');
     if (error || !data?.length) return; // tabla no existe aun o vacia, usa defaults
-    for (const cid of Object.keys(CHECKS))
-      for (const shift of Object.keys(CHECKS[cid].shifts))
-        CHECKS[cid].shifts[shift] = [];
+    const dbCheckTypes = new Set(data.map(t => t.check_type));
+    for (const cid of Object.keys(CHECKS)) {
+      if (dbCheckTypes.has(cid)) {
+        for (const shift of Object.keys(CHECKS[cid].shifts)) {
+          CHECKS[cid].shifts[shift] = [];
+        }
+      }
+    }
     for (const t of data) {
       if (!CHECKS[t.check_type]?.shifts[t.shift]) continue;
       CHECKS[t.check_type].shifts[t.shift].push({ id:t.task_id, h:t.horario||t.shift, t:t.tarea });
