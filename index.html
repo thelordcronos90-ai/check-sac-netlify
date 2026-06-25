@@ -552,97 +552,241 @@ function printBlock(blockId) {
   all.forEach(el => { el.style.display = el._orig || ''; });
 }
 
+// Precarga una imagen y devuelve {dataUrl, w, h, format} listos para jsPDF
+function loadImageForPDF(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      // Re-encode SIEMPRE a JPEG via canvas para que jsPDF no tenga problemas
+      // con PNG, HEIC convertido, o data URLs raros del celular
+      try {
+        const canvas = document.createElement('canvas');
+        const maxPx  = 900; // tope para que el PDF no pese 50MB
+        const scale  = Math.min(1, maxPx / Math.max(img.naturalWidth, img.naturalHeight));
+        canvas.width  = Math.round(img.naturalWidth  * scale);
+        canvas.height = Math.round(img.naturalHeight * scale);
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve({
+          dataUrl: canvas.toDataURL('image/jpeg', 0.82),
+          w: canvas.width,
+          h: canvas.height
+        });
+      } catch (e) { reject(e); }
+    };
+    img.onerror = () => reject(new Error('No se pudo cargar imagen'));
+    img.src = src;
+  });
+}
+
 async function generatePrecioPDF(selectedShift) {
-  const { jsPDF } = window.jspdf;
-  const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-  
-  // Header slide
-  pdf.setFillColor(0, 83, 226); // Walmart Blue
-  pdf.rect(0, 0, 210, 30, 'F');
-  
-  pdf.setTextColor(255, 255, 255);
-  pdf.setFontSize(16);
-  pdf.setFont('helvetica', 'bold');
-  pdf.text('REPORTE DE OPORTUNIDADES EN PRECIO', 15, 12);
-  pdf.setFontSize(11);
-  pdf.text('Comunicación de Precio — Lider — Turno ' + selectedShift, 15, 19);
-  pdf.text('Fecha: ' + currentDate, 150, 19);
-  
-  const check = CHECKS['precio'];
-  const records = await fetchRecordsMap('precio', currentDate);
-  
-  let y = 42;
-  const tasks = check.shifts[selectedShift];
-  
-  pdf.setTextColor(0, 83, 226);
-  pdf.setFontSize(13);
-  pdf.setFont('helvetica', 'bold');
-  pdf.text('Turno ' + selectedShift, 15, y);
-  y += 8;
-  
-  // Responsable
-  const shiftResp = tasks.map(t=>records[t.id]?.responsable).find(r=>r) || 'No registrado';
-  pdf.setTextColor(100, 116, 139);
-  pdf.setFontSize(9.5);
-  pdf.setFont('helvetica', 'normal');
-  pdf.text('Responsable del Turno: ' + shiftResp, 15, y);
-  y += 10;
-  
-  for (const task of tasks) {
-    const rec = records[task.id];
-    const obs = rec?.observation || 'Sin observaciones registradas.';
-    const photos = rec ? await fetchPhotos(rec.id) : [];
-    
-    // Page break check
-    if (y > 230) {
-      pdf.addPage();
-      y = 20;
-    }
-    
-    pdf.setTextColor(30, 41, 59);
-    pdf.setFontSize(11);
+  const btn = event?.target;
+  const originalText = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Generando PDF...'; }
+
+  try {
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+
+    // Constantes de layout (en mm)
+    const PAGE_W   = 210;
+    const PAGE_H   = 297;
+    const MARGIN_L = 15;
+    const MARGIN_R = 15;
+    const MARGIN_B = 20;
+    const CONTENT_W = PAGE_W - MARGIN_L - MARGIN_R;
+
+    // ── Header ────────────────────────────────────────────────────────────
+    pdf.setFillColor(0, 83, 226);
+    pdf.rect(0, 0, PAGE_W, 30, 'F');
+    pdf.setTextColor(255, 255, 255);
+    pdf.setFontSize(16);
     pdf.setFont('helvetica', 'bold');
-    pdf.text('• ' + task.t, 15, y);
-    y += 6;
-    
-    pdf.setFontSize(9.5);
-    pdf.setFont('helvetica', 'normal');
-    pdf.setTextColor(71, 85, 105);
-    pdf.text('Estado: ' + (rec?.completed ? 'OPORTUNIDAD REPORTADA' : 'CONFORME / SIN OBSERVACIONES'), 20, y);
-    y += 5;
-    
-    pdf.text('Comentarios: ' + obs, 20, y);
-    y += 8;
-    
-    if (photos.length > 0) {
-      if (y > 210) {
+    pdf.text('REPORTE DE OPORTUNIDADES EN PRECIO', MARGIN_L, 12);
+    pdf.setFontSize(11);
+    pdf.text('Comunicación de Precio — Lider — Turno ' + selectedShift, MARGIN_L, 19);
+    pdf.text('Fecha: ' + currentDate, 150, 19);
+
+    const check   = CHECKS['precio'];
+    const records = await fetchRecordsMap('precio', currentDate);
+    const tasks   = check.shifts[selectedShift];
+
+    let y = 42;
+
+    // Helper: garantiza que haya espacio o agrega página
+    const ensureSpace = (needed) => {
+      if (y + needed > PAGE_H - MARGIN_B) {
         pdf.addPage();
         y = 20;
       }
-      
-      pdf.text('Evidencias Fotográficas:', 20, y);
-      y += 4;
-      let imgX = 20;
-      for (const p of photos) {
-        try {
-          pdf.addImage(p.photo_url, 'JPEG', imgX, y, 40, 40);
-          imgX += 45;
-          if (imgX > 160) {
-            imgX = 20;
-            y += 45;
-          }
-        } catch (e) {
-          console.error("Error drawing image in PDF", e);
-        }
-      }
-      if (imgX !== 20) {
-        y += 45;
-      }
+    };
+
+    pdf.setTextColor(0, 83, 226);
+    pdf.setFontSize(13);
+    pdf.setFont('helvetica', 'bold');
+    pdf.text('Turno ' + selectedShift, MARGIN_L, y);
+    y += 8;
+
+    const shiftResp = tasks.map(t=>records[t.id]?.responsable).find(r=>r) || 'No registrado';
+    pdf.setTextColor(100, 116, 139);
+    pdf.setFontSize(9.5);
+    pdf.setFont('helvetica', 'normal');
+    pdf.text('Responsable del Turno: ' + shiftResp, MARGIN_L, y);
+    y += 10;
+
+    let photoFailures = 0;
+    let photoTotal    = 0;
+
+    for (const task of tasks) {
+      const rec    = records[task.id];
+      const obs    = (rec?.observation || 'Sin observaciones registradas.').trim();
+      const photos = rec ? await fetchPhotos(rec.id) : [];
+
+      // ── Título de la tarea (con wrap) ─────────────────────────────────
+      const titleLines = pdf.splitTextToSize('• ' + task.t, CONTENT_W);
+      ensureSpace(titleLines.length * 5 + 4);
+      pdf.setTextColor(30, 41, 59);
+      pdf.setFontSize(11);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text(titleLines, MARGIN_L, y);
+      y += titleLines.length * 5 + 1;
+
+      // ── Estado ────────────────────────────────────────────────────────
+      pdf.setFontSize(9.5);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(71, 85, 105);
+      ensureSpace(5);
+      pdf.text('Estado: ' + (rec?.completed ? 'OPORTUNIDAD REPORTADA' : 'CONFORME / SIN OBSERVACIONES'), MARGIN_L + 5, y);
       y += 5;
+
+      // ── Comentarios (con wrap real) ───────────────────────────────────
+      const obsLines = pdf.splitTextToSize('Comentarios: ' + obs, CONTENT_W - 5);
+      ensureSpace(obsLines.length * 4.5 + 2);
+      pdf.text(obsLines, MARGIN_L + 5, y);
+      y += obsLines.length * 4.5 + 3;
+
+      // ── Fotos: 2 por fila, aspect-ratio preservado, max 80x60 mm ──────
+      if (photos.length > 0) {
+        ensureSpace(8);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(0, 83, 226);
+        pdf.text(`Evidencias Fotográficas (${photos.length}):`, MARGIN_L + 5, y);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setTextColor(71, 85, 105);
+        y += 5;
+
+        const COLS    = 2;
+        const GAP     = 5;
+        const SLOT_W  = (CONTENT_W - GAP) / COLS;          // ~85 mm
+        const MAX_H   = 60;                                 // alto máximo por foto
+        let col = 0;
+        let rowMaxH = 0;
+        let rowStartY = y;
+
+        for (const p of photos) {
+          photoTotal++;
+          try {
+            const loaded = await loadImageForPDF(p.photo_url);
+            // Calcular dims preservando aspect ratio
+            const ratio = loaded.w / loaded.h;
+            let drawW = SLOT_W;
+            let drawH = drawW / ratio;
+            if (drawH > MAX_H) {
+              drawH = MAX_H;
+              drawW = drawH * ratio;
+            }
+
+            // Salto de fila si no cabe a lo alto
+            if (rowStartY + drawH > PAGE_H - MARGIN_B) {
+              pdf.addPage();
+              y = 20;
+              rowStartY = y;
+              col = 0;
+              rowMaxH = 0;
+            }
+
+            const x = MARGIN_L + col * (SLOT_W + GAP) + (SLOT_W - drawW) / 2;
+            pdf.addImage(loaded.dataUrl, 'JPEG', x, rowStartY, drawW, drawH, undefined, 'FAST');
+
+            // Borde sutil alrededor de la foto
+            pdf.setDrawColor(203, 213, 225);
+            pdf.setLineWidth(0.2);
+            pdf.rect(x, rowStartY, drawW, drawH);
+
+            if (drawH > rowMaxH) rowMaxH = drawH;
+            col++;
+            if (col >= COLS) {
+              col = 0;
+              rowStartY += rowMaxH + GAP;
+              y = rowStartY;
+              rowMaxH = 0;
+            }
+          } catch (e) {
+            console.error('Error al embedar foto en PDF', p?.orig_name, e);
+            photoFailures++;
+            // Placeholder de error
+            const x = MARGIN_L + col * (SLOT_W + GAP);
+            pdf.setFillColor(254, 226, 226);
+            pdf.rect(x, rowStartY, SLOT_W, 20, 'F');
+            pdf.setTextColor(185, 28, 28);
+            pdf.setFontSize(8);
+            pdf.text('No se pudo cargar foto: ' + (p?.orig_name||''), x + 2, rowStartY + 11);
+            pdf.setTextColor(71, 85, 105);
+            pdf.setFontSize(9.5);
+            if (20 > rowMaxH) rowMaxH = 20;
+            col++;
+            if (col >= COLS) {
+              col = 0;
+              rowStartY += rowMaxH + GAP;
+              y = rowStartY;
+              rowMaxH = 0;
+            }
+          }
+        }
+        // Cerrar última fila si quedó incompleta
+        if (col !== 0) {
+          rowStartY += rowMaxH + GAP;
+          y = rowStartY;
+        }
+        y += 4;
+      }
+
+      // Separador entre tareas
+      ensureSpace(4);
+      pdf.setDrawColor(226, 232, 240);
+      pdf.setLineWidth(0.3);
+      pdf.line(MARGIN_L, y, PAGE_W - MARGIN_R, y);
+      y += 6;
     }
+
+    // ── Footer con paginación ─────────────────────────────────────────────
+    const totalPages = pdf.internal.getNumberOfPages();
+    for (let i = 1; i <= totalPages; i++) {
+      pdf.setPage(i);
+      pdf.setFontSize(8);
+      pdf.setTextColor(148, 163, 184);
+      pdf.text(`Página ${i} de ${totalPages}`, PAGE_W - MARGIN_R, PAGE_H - 8, { align: 'right' });
+      pdf.text(`Check SAC · Comunicación Precio · ${currentDate}`, MARGIN_L, PAGE_H - 8);
+    }
+
+    pdf.save(`Reporte_Precio_Oportunidades_${selectedShift}_${currentDate}.pdf`);
+
+    if (photoFailures > 0) {
+      toast(` PDF generado, pero ${photoFailures}/${photoTotal} fotos no se pudieron incrustar.`);
+    } else if (photoTotal > 0) {
+      toast(` PDF generado con ${photoTotal} foto(s) incrustada(s).`);
+    } else {
+      toast(' PDF generado (sin fotos cargadas).');
+    }
+  } catch (err) {
+    console.error('Error generando PDF:', err);
+    alert(' Error generando PDF: ' + (err?.message || err));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = originalText; }
   }
-  
-  pdf.save(`Reporte_Precio_Oportunidades_${selectedShift}_${currentDate}.pdf`);
 }
 
 async function sharePDF(blockId, date, checkLabel) {
